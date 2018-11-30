@@ -1,72 +1,343 @@
+// "Therefore those skilled at the unorthodox
+// are infinite as heaven and earth,
+// inexhaustible as the great rivers.
+// When they come to an end,
+// they begin again,
+// like the days and months;
+// they die and are reborn,
+// like the four seasons."
+//
+// - Sun Tsu,
+// "The Art of War"
+
 package com.picasoglidesample;
-import android.graphics.drawable.Drawable;
-import android.support.annotation.Nullable;
-import android.support.v7.app.AppCompatActivity;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
-import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.RecyclerView;
-import android.widget.ImageView;
 
-import com.bumptech.glide.load.DataSource;
-import com.bumptech.glide.load.engine.DiskCacheStrategy;
-import com.bumptech.glide.load.engine.GlideException;
-import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
-import com.bumptech.glide.request.RequestListener;
-import com.bumptech.glide.request.target.Target;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.widget.DrawerLayout;
+import android.support.v7.app.ActionBarDrawerToggle;
+import android.support.v7.app.AppCompatActivity;
+import android.util.Pair;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.TextView;
+import android.widget.Toast;
 
-import java.util.ArrayList;
-import java.util.List;
+import com.picasoglidesample.cropper.CropImage;
+import com.picasoglidesample.cropper.CropImageView;
+
 
 public class MainActivity extends AppCompatActivity {
-    private RecyclerView ivImage;
-    private AddressReyclerAdapter adapter;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        ivImage=findViewById(R.id.ivImage);
-        ivImage.setLayoutManager(new LinearLayoutManager(this));
-        String url="https://s3.ap-south-1.amazonaws.com/eutigo/staging/daily_wishes/good_morning/cover_picture.jpg";
-        //String url="https://homepages.cae.wisc.edu/~ece533/images/baboon.png";
-       /* GlideApp.with(this)
-                .load(url)
-                .placeholder(R.drawable.placeholder)
-                .fitCenter()
-                .into(ivImage);
-*/
-        List<String> imgList=new ArrayList<>();
-        for (int i=0;i<800;i++){
-            imgList.add(url);
-        }
+  // region: Fields and Consts
 
-        adapter= new AddressReyclerAdapter(MainActivity.this, imgList, new OnClickItem() {
-            @Override
-            public void onListItemClick(Object o, int position) {
+  DrawerLayout mDrawerLayout;
 
-            }
-        });
-        ivImage.setAdapter(adapter);
-        adapter.notifyDataSetChanged();
+  private ActionBarDrawerToggle mDrawerToggle;
 
-/*
-        GlideApp.with(this)
-                .load(url)
-                .centerCrop()
-                .transition(DrawableTransitionOptions.withCrossFade()) //Optional
-                .skipMemoryCache(true)  //No memory cache
-                .diskCacheStrategy(DiskCacheStrategy.NONE)   //No disk cache
-                .listener(new RequestListener<Drawable>() {
-                    @Override
-                    public boolean onLoadFailed(@Nullable GlideException e, Object model, Target<Drawable> target, boolean isFirstResource) {
-                        return false;
-                    }
+  private MainFragment mCurrentFragment;
 
-                    @Override
-                    public boolean onResourceReady(Drawable resource, Object model, Target<Drawable> target, DataSource dataSource, boolean isFirstResource) {
-                        return false;
-                    }
-                })
-                .into(ivImage);*/
+  private Uri mCropImageUri;
+
+  private CropImageViewOptions mCropImageViewOptions = new CropImageViewOptions();
+  // endregion
+
+  public void setCurrentFragment(MainFragment fragment) {
+    mCurrentFragment = fragment;
+  }
+
+  public void setCurrentOptions(CropImageViewOptions options) {
+    mCropImageViewOptions = options;
+    updateDrawerTogglesByOptions(options);
+  }
+
+  @Override
+  protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+
+    getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+    getSupportActionBar().setHomeButtonEnabled(true);
+
+    mDrawerLayout = (DrawerLayout) findViewById(R.id.drawer_layout);
+
+    mDrawerToggle =
+        new ActionBarDrawerToggle(
+            this, mDrawerLayout, R.string.main_drawer_open, R.string.main_drawer_close);
+    mDrawerToggle.setDrawerIndicatorEnabled(true);
+    mDrawerLayout.setDrawerListener(mDrawerToggle);
+
+    if (savedInstanceState == null) {
+      setMainFragmentByPreset(CropDemoPreset.RECT);
     }
+  }
+
+  @Override
+  protected void onPostCreate(Bundle savedInstanceState) {
+    super.onPostCreate(savedInstanceState);
+    mDrawerToggle.syncState();
+    mCurrentFragment.updateCurrentCropViewOptions();
+  }
+
+  @Override
+  public boolean onCreateOptionsMenu(Menu menu) {
+    MenuInflater inflater = getMenuInflater();
+    inflater.inflate(R.menu.main, menu);
+    return true;
+  }
+
+  @Override
+  public boolean onOptionsItemSelected(MenuItem item) {
+    if (mDrawerToggle.onOptionsItemSelected(item)) {
+      return true;
+    }
+    if (mCurrentFragment != null && mCurrentFragment.onOptionsItemSelected(item)) {
+      return true;
+    }
+    return super.onOptionsItemSelected(item);
+  }
+
+  @Override
+  @SuppressLint("NewApi")
+  protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+
+    if (requestCode == CropImage.PICK_IMAGE_CHOOSER_REQUEST_CODE
+        && resultCode == AppCompatActivity.RESULT_OK) {
+      Uri imageUri = CropImage.getPickImageResultUri(this, data);
+
+      // For API >= 23 we need to check specifically that we have permissions to read external
+      // storage,
+      // but we don't know if we need to for the URI so the simplest is to try open the stream and
+      // see if we get error.
+      boolean requirePermissions = false;
+      if (CropImage.isReadExternalStoragePermissionsRequired(this, imageUri)) {
+
+        // request permissions and handle the result in onRequestPermissionsResult()
+        requirePermissions = true;
+        mCropImageUri = imageUri;
+        requestPermissions(
+            new String[] {Manifest.permission.READ_EXTERNAL_STORAGE},
+            CropImage.PICK_IMAGE_PERMISSIONS_REQUEST_CODE);
+      } else {
+
+        mCurrentFragment.setImageUri(imageUri);
+      }
+    }
+  }
+
+  @Override
+  public void onRequestPermissionsResult(
+      int requestCode, String permissions[], int[] grantResults) {
+    if (requestCode == CropImage.CAMERA_CAPTURE_PERMISSIONS_REQUEST_CODE) {
+      if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        CropImage.startPickImageActivity(this);
+      } else {
+        Toast.makeText(this, "Cancelling, required permissions are not granted", Toast.LENGTH_LONG)
+            .show();
+      }
+    }
+    if (requestCode == CropImage.PICK_IMAGE_PERMISSIONS_REQUEST_CODE) {
+      if (mCropImageUri != null
+          && grantResults.length > 0
+          && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        mCurrentFragment.setImageUri(mCropImageUri);
+      } else {
+        Toast.makeText(this, "Cancelling, required permissions are not granted", Toast.LENGTH_LONG)
+            .show();
+      }
+    }
+  }
+
+  @SuppressLint("NewApi")
+  public void onDrawerOptionClicked(View view) {
+    switch (view.getId()) {
+      case R.id.drawer_option_load:
+        if (CropImage.isExplicitCameraPermissionRequired(this)) {
+          requestPermissions(
+              new String[] {Manifest.permission.CAMERA},
+              CropImage.CAMERA_CAPTURE_PERMISSIONS_REQUEST_CODE);
+        } else {
+          CropImage.startPickImageActivity(this);
+        }
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_oval:
+        setMainFragmentByPreset(CropDemoPreset.CIRCULAR);
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_rect:
+        setMainFragmentByPreset(CropDemoPreset.RECT);
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_customized_overlay:
+        setMainFragmentByPreset(CropDemoPreset.CUSTOMIZED_OVERLAY);
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_min_max_override:
+        setMainFragmentByPreset(CropDemoPreset.MIN_MAX_OVERRIDE);
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_scale_center:
+        setMainFragmentByPreset(CropDemoPreset.SCALE_CENTER_INSIDE);
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_toggle_scale:
+        mCropImageViewOptions.scaleType =
+            mCropImageViewOptions.scaleType == CropImageView.ScaleType.FIT_CENTER
+                ? CropImageView.ScaleType.CENTER_INSIDE
+                : mCropImageViewOptions.scaleType == CropImageView.ScaleType.CENTER_INSIDE
+                    ? CropImageView.ScaleType.CENTER
+                    : mCropImageViewOptions.scaleType == CropImageView.ScaleType.CENTER
+                        ? CropImageView.ScaleType.CENTER_CROP
+                        : CropImageView.ScaleType.FIT_CENTER;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_shape:
+        mCropImageViewOptions.cropShape =
+            mCropImageViewOptions.cropShape == CropImageView.CropShape.RECTANGLE
+                ? CropImageView.CropShape.OVAL
+                : CropImageView.CropShape.RECTANGLE;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_guidelines:
+        mCropImageViewOptions.guidelines =
+            mCropImageViewOptions.guidelines == CropImageView.Guidelines.OFF
+                ? CropImageView.Guidelines.ON
+                : mCropImageViewOptions.guidelines == CropImageView.Guidelines.ON
+                    ? CropImageView.Guidelines.ON_TOUCH
+                    : CropImageView.Guidelines.OFF;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_aspect_ratio:
+        if (!mCropImageViewOptions.fixAspectRatio) {
+          mCropImageViewOptions.fixAspectRatio = true;
+          mCropImageViewOptions.aspectRatio = new Pair<>(1, 1);
+        } else {
+          if (mCropImageViewOptions.aspectRatio.first == 1
+              && mCropImageViewOptions.aspectRatio.second == 1) {
+            mCropImageViewOptions.aspectRatio = new Pair<>(4, 3);
+          } else if (mCropImageViewOptions.aspectRatio.first == 4
+              && mCropImageViewOptions.aspectRatio.second == 3) {
+            mCropImageViewOptions.aspectRatio = new Pair<>(16, 9);
+          } else if (mCropImageViewOptions.aspectRatio.first == 16
+              && mCropImageViewOptions.aspectRatio.second == 9) {
+            mCropImageViewOptions.aspectRatio = new Pair<>(9, 16);
+          } else {
+            mCropImageViewOptions.fixAspectRatio = false;
+          }
+        }
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_auto_zoom:
+        mCropImageViewOptions.autoZoomEnabled = !mCropImageViewOptions.autoZoomEnabled;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_max_zoom:
+        mCropImageViewOptions.maxZoomLevel =
+            mCropImageViewOptions.maxZoomLevel == 4
+                ? 8
+                : mCropImageViewOptions.maxZoomLevel == 8 ? 2 : 4;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_set_initial_crop_rect:
+        mCurrentFragment.setInitialCropRect();
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_reset_crop_rect:
+        mCurrentFragment.resetCropRect();
+        mDrawerLayout.closeDrawers();
+        break;
+      case R.id.drawer_option_toggle_multitouch:
+        mCropImageViewOptions.multitouch = !mCropImageViewOptions.multitouch;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_show_overlay:
+        mCropImageViewOptions.showCropOverlay = !mCropImageViewOptions.showCropOverlay;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      case R.id.drawer_option_toggle_show_progress_bar:
+        mCropImageViewOptions.showProgressBar = !mCropImageViewOptions.showProgressBar;
+        mCurrentFragment.setCropImageViewOptions(mCropImageViewOptions);
+        updateDrawerTogglesByOptions(mCropImageViewOptions);
+        break;
+      default:
+        Toast.makeText(this, "Unknown drawer option clicked", Toast.LENGTH_LONG).show();
+    }
+  }
+
+  private void setMainFragmentByPreset(CropDemoPreset demoPreset) {
+    FragmentManager fragmentManager = getSupportFragmentManager();
+    fragmentManager
+        .beginTransaction()
+        .replace(R.id.container, MainFragment.newInstance(demoPreset))
+        .commit();
+  }
+
+  @SuppressLint("StringFormatMatches")
+  private void updateDrawerTogglesByOptions(CropImageViewOptions options) {
+    ((TextView) findViewById(R.id.drawer_option_toggle_scale))
+        .setText(
+            getResources()
+                .getString(R.string.drawer_option_toggle_scale, options.scaleType.name()));
+    ((TextView) findViewById(R.id.drawer_option_toggle_shape))
+        .setText(
+            getResources()
+                .getString(R.string.drawer_option_toggle_shape, options.cropShape.name()));
+    ((TextView) findViewById(R.id.drawer_option_toggle_guidelines))
+        .setText(
+            getResources()
+                .getString(R.string.drawer_option_toggle_guidelines, options.guidelines.name()));
+    ((TextView) findViewById(R.id.drawer_option_toggle_multitouch))
+        .setText(
+            getResources()
+                .getString(
+                    R.string.drawer_option_toggle_multitouch,
+                    Boolean.toString(options.multitouch)));
+    ((TextView) findViewById(R.id.drawer_option_toggle_show_overlay))
+        .setText(
+            getResources()
+                .getString(
+                    R.string.drawer_option_toggle_show_overlay,
+                    Boolean.toString(options.showCropOverlay)));
+    ((TextView) findViewById(R.id.drawer_option_toggle_show_progress_bar))
+        .setText(
+            getResources()
+                .getString(
+                    R.string.drawer_option_toggle_show_progress_bar,
+                    Boolean.toString(options.showProgressBar)));
+
+    String aspectRatio = "FREE";
+    if (options.fixAspectRatio) {
+      aspectRatio = options.aspectRatio.first + ":" + options.aspectRatio.second;
+    }
+    ((TextView) findViewById(R.id.drawer_option_toggle_aspect_ratio))
+        .setText(getResources().getString(R.string.drawer_option_toggle_aspect_ratio, aspectRatio));
+
+    ((TextView) findViewById(R.id.drawer_option_toggle_auto_zoom))
+        .setText(
+            getResources()
+                .getString(
+                    R.string.drawer_option_toggle_auto_zoom,
+                    options.autoZoomEnabled ? "Enabled" : "Disabled"));
+    ((TextView) findViewById(R.id.drawer_option_toggle_max_zoom))
+        .setText(
+            getResources().getString(R.string.drawer_option_toggle_max_zoom, options.maxZoomLevel));
+  }
 }
